@@ -97,7 +97,8 @@ class qasaplugqt:
                     plugtext = "switch off"
                 else:
                     plugtext = "switch on"
-                plugbutton = self.plugbuttons.get(addr,QPushButton(plugtext))
+                plugbutton = self.plugbuttons.get(addr,QPushButton())
+                plugbutton.setText(plugtext)
                 plugbutton.setCheckable(True)
                 plugbutton.setChecked(dev.is_on)
                 if not addr in self.plugbuttons:
@@ -142,10 +143,8 @@ class qasaplugqt:
                 #print("switch: " + str(plug.alias))
                 if is_on:
                     asyncio.run(plug.turn_off())
-                    plugbutton.setText("switch on")
                 else:
                     asyncio.run(plug.turn_on())
-                    plugbutton.setText("switch off")
                 asyncio.run(plug.update())
                 self.plugs.update({addr:plug})
                 self.updateview.append(addr)
