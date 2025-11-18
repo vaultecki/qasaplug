@@ -1,168 +1,170 @@
 #!/usr/bin/env python
-#
-
-# MIT License
-# 
-# Copyright (c) 2021 ecki
-# 
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-# 
-# The above copyright notice and this permission notice shall be included in all
-# copies or substantial portions of the Software.
-# 
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-#
-
-import asyncio
 import sys
-from kasa import Discover, SmartPlug
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout
-from PyQt5.QtCore import QTimer
+import asyncio
+from functools import partial
+from kasa import Discover
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QLabel,
+    QPushButton, QHBoxLayout
+)
+from qasync import QEventLoop, asyncSlot
 
-class qasaplugqt:
+
+class QasaPlugQt(QWidget):
     def __init__(self):
-        self.plugwidgets = {}
-        self.plugbuttons = {}
+        super().__init__()
         self.plugs = {}
-        self.updateview = []
+        self.ui_elements = {}  # Stores references to avoid rebuilding widgets
 
-        self.discover()
-        self.updatetimer = QTimer()
+        self.setup_window()
 
-        self.app = QApplication(sys.argv)
-        self.windowsetup()
-        self.windowshow()
-            
-    def sortdevices(self,devices):
-        newdevices = {}
-        sortediplist = sorted(devices)
-        for addr in sortediplist:
-            dev = devices.get(addr,"error")
-            if dev != "error":
-                newdevices.update({addr:dev})
-        return newdevices
-    
-    def discover(self):
-        devices = asyncio.run(Discover.discover())
-        for addr,dev in devices.items():
-            asyncio.run(dev.update())
-            devices.update({addr:dev})
-        devices = self.sortdevices(devices)
-        for addr, dev in devices.items():
-            if dev.is_plug:
-                asyncio.run(dev.update())
-                notexisting = False
-                if not self.plugs.get(addr,False):
-                    notexisting = True
-                plug = self.plugs.get(addr,SmartPlug(addr))
-                is_on = False
-                powerupdate = False
-                if not notexisting:
-                    is_on = plug.is_on
-                    if plug.model.startswith("HS110"):
-                        powerupdate = True
-                asyncio.run(plug.update())
-                if notexisting or powerupdate or is_on != plug.is_on:
-                    self.updateview.append(addr)
-                self.plugs.update({addr:plug})
-    
-    def windowsetup(self):
-        self.mainwindow = QWidget()
-        self.mainwindow.setWindowTitle("QasaPlug")
-        self.mainlayout = QVBoxLayout()
-        self.mainwindow.setLayout(self.mainlayout)
-        self.windowredraw()
-    
-    def windowredraw(self):
-        for addr, dev in self.plugs.items():
-            if addr in self.updateview:
-                #print("update "+str(addr)+"  "+str(dev.alias))
-                plugname = QLabel(str(dev.alias))
-                powerlabel = ""
-                if dev.model.startswith("HS110"):
-                    powerlabel = str(dev.emeter_realtime.get("power",""))
-                plugpower = QLabel(powerlabel)
-                if dev.is_on:
-                    plugtext = "switch off"
-                else:
-                    plugtext = "switch on"
-                plugbutton = self.plugbuttons.get(addr,QPushButton())
-                plugbutton.setText(plugtext)
-                plugbutton.setCheckable(True)
-                plugbutton.setChecked(dev.is_on)
-                if not addr in self.plugbuttons:
-                    plugbutton.clicked.connect(lambda:self.buttonpushed())
-                self.plugbuttons.update({addr:plugbutton})
-                
-                plugwidget = self.plugwidgets.get(addr,QWidget())
-                if addr in self.plugwidgets:
-                    widgetexists = True
-                    self.cleanwidget(plugwidget)
-                    pluglayout = plugwidget.layout()
-                else:
-                    widgetexists = False
-                    pluglayout = QHBoxLayout()
-                    plugwidget.setLayout(pluglayout)
-                
-                pluglayout.addWidget(plugname)
-                pluglayout.addWidget(plugpower)
-                pluglayout.addWidget(plugbutton)
+        # Start the initial discovery
+        asyncio.ensure_future(self.discover_loop())
 
-                if not widgetexists:
-                    self.plugwidgets.update({addr:plugwidget})
-                    self.mainlayout.addWidget(plugwidget)
-                self.updateview.remove(addr)
-        
-    def windowshow(self):
-        self.mainwindow.show()
+    def setup_window(self):
+        self.setWindowTitle("QasaPlug (Qt6)")
+        self.main_layout = QVBoxLayout()
+        self.setLayout(self.main_layout)
+        self.show()
 
-        self.updatetimer.setInterval(60000)
-        self.updatetimer.timeout.connect(self.discover)
-        self.updatetimer.start()
+    async def discover_loop(self):
+        """Runs discovery periodically without blocking the UI."""
+        while True:
+            try:
+                # Async discovery that doesn't freeze the GUI
+                found_devices = await Discover.discover()
 
-        sys.exit(self.app.exec_())
-    
-    def buttonpushed(self):
-        for addr,plugbutton in self.plugbuttons.items():
-            plug = self.plugs.get(addr,"error")
-            is_on = "error"
-            if plug != "error":
-                is_on = plug.is_on
-            if plugbutton.isChecked() != is_on: 
-                #print("switch: " + str(plug.alias))
-                if is_on:
-                    asyncio.run(plug.turn_off())
-                else:
-                    asyncio.run(plug.turn_on())
-                asyncio.run(plug.update())
-                self.plugs.update({addr:plug})
-                self.updateview.append(addr)
-                self.windowredraw()
-    
-    def cleanwidget(self,widget):
-        layout = widget.layout()
-        self.deleteItemsOfLayout(layout) 
+                # Sort devices by IP for consistent display order
+                sorted_ips = sorted(found_devices.keys())
 
-    def deleteItemsOfLayout(self,layout):
-      if layout is not None:
-         while layout.count():
-             item = layout.takeAt(0)
-             widget = item.widget()
-             if widget is not None:
-                 widget.setParent(None)
-             else:
-                 deleteItemsOfLayout(item.layout())
+                for addr in sorted_ips:
+                    dev = found_devices[addr]
+
+                    # If we haven't seen this plug, or we need to update it
+                    if addr not in self.plugs:
+                        # Initialize connection
+                        await dev.update()
+                        self.plugs[addr] = dev
+                        self.add_device_widget(addr, dev)
+                    else:
+                        # Update existing plug state
+                        self.plugs[addr] = dev
+                        await dev.update()
+                        self.update_device_widget(addr, dev)
+
+            except Exception as e:
+                print(f"Discovery error: {e}")
+
+            # Non-blocking sleep for 60 seconds
+            await asyncio.sleep(60)
+
+    def add_device_widget(self, addr, dev):
+        """Creates the UI row for a new device."""
+        if not dev.is_plug:
+            return
+
+        # Create Container
+        row_widget = QWidget()
+        row_layout = QHBoxLayout()
+        row_widget.setLayout(row_layout)
+
+        # Name Label
+        name_label = QLabel(dev.alias)
+
+        # Power Label (for HS110)
+        power_text = ""
+        if dev.model.startswith("HS110") and dev.emeter_realtime:
+            power_text = f"{dev.emeter_realtime.get('power', 0)} W"
+        power_label = QLabel(power_text)
+
+        # Toggle Button
+        btn = QPushButton()
+        btn.setCheckable(True)
+        # Bind the specific address to this button's click event
+        btn.clicked.connect(partial(self.handle_toggle, addr))
+
+        # Add to layout
+        row_layout.addWidget(name_label)
+        row_layout.addWidget(power_label)
+        row_layout.addWidget(btn)
+
+        self.main_layout.addWidget(row_widget)
+
+        # Store references so we can update them later without rebuilding
+        self.ui_elements[addr] = {
+            'widget': row_widget,
+            'name_lbl': name_label,
+            'power_lbl': power_label,
+            'btn': btn
+        }
+
+        # Set initial state
+        self.update_device_widget_state(addr, dev)
+
+    def update_device_widget(self, addr, dev):
+        """Updates the UI for an existing device."""
+        if addr in self.ui_elements:
+            self.update_device_widget_state(addr, dev)
+
+    def update_device_widget_state(self, addr, dev):
+        """Sets text and checked state based on device object."""
+        elements = self.ui_elements[addr]
+
+        # Update Name
+        elements['name_lbl'].setText(dev.alias)
+
+        # Update Power (if applicable)
+        if dev.model.startswith("HS110") and dev.emeter_realtime:
+            power_val = dev.emeter_realtime.get('power', 0)
+            elements['power_lbl'].setText(f"{power_val:.1f} W")
+
+        # Update Button State
+        btn = elements['btn']
+
+        # Temporarily block signals to prevent triggering 'handle_toggle' during update
+        btn.blockSignals(True)
+        if dev.is_on:
+            btn.setText("Switch Off")
+            btn.setChecked(True)
+        else:
+            btn.setText("Switch On")
+            btn.setChecked(False)
+        btn.blockSignals(False)
+
+    @asyncSlot()
+    async def handle_toggle(self, addr):
+        """Handle button press asynchronously."""
+        dev = self.plugs.get(addr)
+        if not dev:
+            return
+
+        btn = self.ui_elements[addr]['btn']
+        # Optimistic UI update: assume it worked, revert if it fails
+        target_state = btn.isChecked()
+
+        try:
+            if target_state:
+                await dev.turn_on()
+            else:
+                await dev.turn_off()
+
+            await dev.update()
+            self.update_device_widget_state(addr, dev)
+
+        except Exception as e:
+            print(f"Error switching device: {e}")
+            # Revert button state on failure
+            btn.setChecked(not target_state)
+
 
 if __name__ == "__main__":
-    MyGUI = qasaplugqt()
+    app = QApplication(sys.argv)
+
+    # QEventLoop from qasync allows asyncio to run inside PyQt6
+    loop = QEventLoop(app)
+    asyncio.set_event_loop(loop)
+
+    window = QasaPlugQt()
+
+    with loop:
+        loop.run_forever()
